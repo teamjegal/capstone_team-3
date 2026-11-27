@@ -63,6 +63,7 @@ def main():
                 try:
                     out = run_agent(case["query"], case["session"]["customer_id"],
                                     history=case.get("conversation_history"))
+                    out.pop("messages", None)
                     err = None
                 except Exception as e:  # 에이전트 크래시도 결과로 기록
                     out, err = {"answer": None, "tool_calls": [], "usage": {}, "latency_s": None}, \
