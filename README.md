@@ -56,6 +56,7 @@ uv run python 03_naive_rag.py     # Naive RAG (data/ 필요)
 ### 7. Baseline Agent 실행 · 평가
 ```powershell
 uv run python baseline_agent.py "내 주문 언제 도착해?" --customer C0001   # 질문 하나
+uv run python baseline_agent.py --chat --customer C0001                  # 대화 모드 (exit / 종료 로 끝냄)
 uv run python run_eval.py                                                # 공개 평가셋 30개
 uv run python run_eval.py --ids PUB-001 --repeat 5                       # 같은 질문 반복 (일관성)
 ```
