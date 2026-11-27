@@ -37,13 +37,12 @@ curl.exe http://localhost:8000/v1/models -H "Authorization: Bearer <API키>"
 ```
 
 ### 5. 데이터셋 배치
-배포된 `ecommerce_cs_mock_data.zip` 을 프로젝트 폴더에 풀어 `data/` 가 아래처럼 되게 합니다. (`data/` 는 git 에 올리지 않고 각자 배치)
+배포된 `data.zip` 을 프로젝트 폴더에 풀어 `data/` 가 아래처럼 되게 합니다. (`data/` 는 git 에 올리지 않고 각자 배치)
 ```
 data/
-├── README.md       ← 데이터 설명 (꼭 읽기)
-├── knowledge/      ← 정책 문서 5개(.md), faq.json, consultation_history.json
-├── system/         ← products, customers, orders, shipments, coupons, product_return_conditions
-└── eval/           ← eval_public.jsonl 등
+├── eval_public.jsonl  ← 공개 평가셋 30개
+├── knowledge/         ← 정책 문서 5개(.md), faq.json, consultation_history.json
+└── system/            ← products, customers, orders, shipments, coupons, product_return_conditions
 ```
 
 ### 6. 예제 실행
@@ -53,18 +52,30 @@ uv run python 02_tool_calling.py  # Tool Calling (data/ 필요)
 uv run python 03_naive_rag.py     # Naive RAG (data/ 필요)
 ```
 
+### 7. Baseline Agent 실행 · 평가
+```powershell
+uv run python baseline_agent.py "내 주문 언제 도착해?" --customer C0001   # 질문 하나
+uv run python run_eval.py                                                # 공개 평가셋 30개
+uv run python run_eval.py --ids PUB-001 --repeat 5                       # 같은 질문 반복 (일관성)
+```
+결과는 `results/eval_<시각>.jsonl` 에 저장됩니다 (git 제외).
+
 ## 파일 구성
 | 파일 | 설명 |
 |---|---|
 | `llm_client.py` | LLM 연결 공통 코드 (`from llm_client import client, MODEL`) |
 | `01_chat.py` | 기본 호출 — 연결 확인, latency · token usage 측정 |
 | `02_tool_calling.py` | 도구 호출 루프, 주문 소유자 검증은 코드에서 |
-| `03_naive_rag.py` | 글자 bigram 겹침 기반 단순 RAG — 개선 출발점 |
+| `03_naive_rag.py` | Baseline A — 글자 bigram 겹침 기반 단순 RAG |
+| `baseline_agent.py` | Baseline B — Naive Agent (도구 13개, **허점 15개를 일부러 남김**) |
+| `run_eval.py` | 평가셋 실행 · 결과 저장 · 간단 채점 (must_include, 도구, 지연, 토큰) |
+| `docs/baseline_flaws.md` | 허점 지도 — 문제 영역별 코드 위치와 재현 예시 |
 
 ## 알려진 문제 (개선 대상)
-`03_naive_rag.py` 는 일부러 단순하게 만든 베이스라인입니다.
-- 배송 질문에 환불 문서가 1순위로 검색됨 (bigram 겹침 검색의 한계)
-- 승인되지 않은 `draft` 문서가 컨텍스트에 섞여 들어옴
+`03_naive_rag.py`, `baseline_agent.py` 는 일부러 단순하게 만든 베이스라인입니다.
+운영 중 발생하는 문제 15가지(지식검색 · 의도분석 · 시스템연동 · 시스템실행 · 신뢰성 · 보안 · 성능 · 운영)가
+재현되도록 허점을 남겨 두었고, 목록과 위치는 [docs/baseline_flaws.md](docs/baseline_flaws.md) 에 있습니다.
+팀은 이 중 한 영역을 골라 개선합니다.
 
 ## 선택 패키지
 | 목적 | 설치 |
