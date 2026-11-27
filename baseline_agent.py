@@ -228,12 +228,40 @@ def run_agent(query, customer_id, history=None, max_turns=10, temperature=0.7, v
     }
 
 
+def _print_result(out):
+    print("[답변]", out["answer"])
+    print(f"  (응답 시간 {out['latency_s']}초 · LLM 호출 {out['usage']['llm_calls']}회 · "
+          f"input {out['usage']['prompt_tokens']} token · output {out['usage']['completion_tokens']} token)")
+
+
+def chat(customer_id):
+    """터미널 대화 모드 — 이전 질문·답변을 history 로 넘겨 대화를 이어간다."""
+    print(f"대화 모드 · 로그인 고객 {customer_id} · 종료: exit / quit / 종료 (또는 Ctrl+C)")
+    history = []
+    while True:
+        try:
+            query = input("\n[고객] ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        if not query:
+            continue
+        if query.lower() in ("exit", "quit", "종료"):
+            break
+        out = run_agent(query, customer_id, history=history, verbose=True)
+        _print_result(out)
+        # [허점-12] 도구 호출 결과는 history 에 남기지 않음 — 다음 턴에서 같은 조회를 반복하기 쉬움
+        history += [{"role": "user", "content": query},
+                    {"role": "assistant", "content": out["answer"] or ""}]
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("query")
+    ap.add_argument("query", nargs="?", help="질문 (생략하면 --chat 과 같음)")
     ap.add_argument("--customer", default="C0001", help="로그인한 고객 ID (세션)")
+    ap.add_argument("--chat", action="store_true", help="터미널 대화 모드")
     a = ap.parse_args()
-    out = run_agent(a.query, a.customer, verbose=True)
-    print("[답변]", out["answer"])
-    print(f"\n응답 시간 {out['latency_s']}초 · LLM 호출 {out['usage']['llm_calls']}회 · "
-          f"input {out['usage']['prompt_tokens']} token · output {out['usage']['completion_tokens']} token")
+    if a.chat or not a.query:
+        chat(a.customer)
+    else:
+        _print_result(run_agent(a.query, a.customer, verbose=True))
