@@ -7,6 +7,9 @@
 data/
 *.zip
 
+# 평가 실행 결과
+results/
+
 # Python
 __pycache__/
 *.py[cod]
