@@ -1,10 +1,11 @@
 """평가 데이터셋으로 Baseline Agent 를 돌려 문제를 재현 · 측정한다.
 
-    uv run python run_eval.py                    # 공개 평가셋 30개 전체
+    uv run python run_eval.py                    # Baseline B (Naive Agent), 공개 평가셋 30개
+    uv run python run_eval.py --system a         # Baseline A (Naive RAG)
     uv run python run_eval.py --ids PUB-001 PUB-017
     uv run python run_eval.py --ids PUB-001 --repeat 3   # 실행 일관성(비결정성) 확인
 
-결과는 results/eval_<시각>.jsonl 에 케이스별로 저장된다.
+결과는 results/eval_<시스템>_<시각>.jsonl 에 케이스별로 저장된다.
 채점은 단순 문자열 포함 여부 + 도구 이름 비교라서 참고용 지표다.
 """
 import argparse
@@ -13,7 +14,14 @@ import pathlib
 import time
 import traceback
 
-from baseline_agent import run_agent
+
+def load_system(name):
+    """평가할 시스템의 실행 함수 — (query, customer_id, history) 를 받아 결과 dict 를 돌려줘야 한다."""
+    if name == "a":
+        from baseline_rag import run_rag
+        return run_rag
+    from baseline_agent import run_agent
+    return run_agent
 
 
 def find_eval_file():
@@ -44,7 +52,9 @@ def main():
     ap.add_argument("--ids", nargs="*", help="실행할 케이스 id (생략 시 전체)")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--system", choices=["a", "b"], default="b", help="a: Naive RAG, b: Naive Agent (기본)")
     a = ap.parse_args()
+    run_agent = load_system(a.system)
 
     cases = [json.loads(l) for l in find_eval_file().read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.ids:
@@ -54,7 +64,7 @@ def main():
 
     out_dir = pathlib.Path("results")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"eval_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    out_path = out_dir / f"eval_{a.system}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
 
     rows = []
     with out_path.open("w", encoding="utf-8") as f:
@@ -80,7 +90,7 @@ def main():
                 print(f"{case['id']}#{r} [{case['category']}] {status} · {out['latency_s']}s · {tools}")
 
     ok = [r for r in rows if not r["error"]]
-    print("\n===== 요약 =====")
+    print(f"\n===== 요약 (Baseline {a.system.upper()}) =====")
     print(f"케이스 {len(rows)} · 크래시 {len(rows) - len(ok)}")
     if ok:
         full = sum(1 for r in ok if not r["score"]["must_include_miss"] and not r["score"]["must_not_include_violated"])

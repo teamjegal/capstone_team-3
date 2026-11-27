@@ -100,22 +100,37 @@ uv run python 01_chat.py
 
 ## 실행 방법
 
-### 예제
+### 예제 (환경설정 문서)
 ```powershell
 uv run python 01_chat.py          # 기본 호출 (응답 시간 · 토큰 수)
 uv run python 02_tool_calling.py  # Tool Calling (data/ 필요)
-uv run python 03_naive_rag.py     # Baseline A — Naive RAG (data/ 필요)
+uv run python 03_naive_rag.py     # 글자 겹침 검색 RAG 예제 (data/ 필요)
 ```
 
-### Baseline Agent · 평가
+### Baseline A — Naive RAG (Embedding + Vector DB)
+```powershell
+uv run python baseline_rag.py "무료배송 기준이 얼마인가요?"   # 질문 하나 (첫 실행 시 임베딩 모델 다운로드 · 인덱스 생성)
+uv run python baseline_rag.py --chat                         # 대화 모드
+uv run python baseline_rag.py --rebuild                      # data/ 가 바뀌었을 때 인덱스 다시 생성
+```
+임베딩 모델 `intfloat/multilingual-e5-small`(약 470MB)은 첫 실행 때 자동으로 받고, 인덱스는 `chroma_db/` 에 저장됩니다 (git 제외).
+
+### Baseline B — Naive Agent · 평가
 ```powershell
 uv run python baseline_agent.py "내 주문 언제 도착해?" --customer C0001   # 질문 하나
 uv run python baseline_agent.py --chat --customer C0001                  # 대화 모드 (exit / 종료 로 끝냄)
-uv run python run_eval.py                                                # 공개 평가셋 30개
+uv run python run_eval.py                                                # Baseline B 로 공개 평가셋 30개
+uv run python run_eval.py --system a                                     # Baseline A 로 공개 평가셋 30개
 uv run python run_eval.py --ids PUB-001 --repeat 5                       # 같은 질문 반복 (일관성)
 uv run python run_scenarios.py                                           # 문제 유형별 대화 시나리오 16개
 uv run python run_scenarios.py S11 S12                                   # 일부 시나리오만
 ```
+### A · B 비교 대화
+```powershell
+uv run python compare_chat.py --customer C0001
+```
+질문 하나를 입력하면 Baseline A 와 B 가 차례로 답합니다 (대화 기록은 각자 유지, `--customer` 는 B 만 사용).
+
 `--customer` 는 로그인한 고객 ID(세션)입니다 (C0001 ~ C0050).
 결과는 `results/` 에 jsonl 로 저장됩니다 (git 제외).
 
@@ -131,15 +146,17 @@ uv run python run_scenarios.py S11 S12                                   # 일�
 | `llm_client.py` | LLM 연결 공통 코드 (`from llm_client import client, MODEL`) |
 | `01_chat.py` | 기본 호출 — 연결 확인, latency · token usage 측정 |
 | `02_tool_calling.py` | 도구 호출 루프, 주문 소유자 검증은 코드에서 |
-| `03_naive_rag.py` | Baseline A — 글자 bigram 겹침 기반 단순 RAG |
+| `03_naive_rag.py` | 환경설정 문서 예제 — 글자 bigram 겹침 기반 단순 RAG |
+| `baseline_rag.py` | Baseline A — Naive RAG (multilingual-e5 임베딩 + Chroma, **허점 8개를 일부러 남김**) |
 | `baseline_agent.py` | Baseline B — Naive Agent (도구 13개, **허점 15개를 일부러 남김**) |
-| `run_eval.py` | 평가셋 실행 · 결과 저장 · 간단 채점 (must_include, 도구, 지연, 토큰) |
+| `compare_chat.py` | A · B 비교 대화 모드 — 같은 질문에 두 베이스라인 답을 나란히 출력 |
+| `run_eval.py` | 평가셋 실행 · 결과 저장 · 간단 채점 (`--system a` / `b`) |
 | `run_scenarios.py` | 멀티턴 대화 시나리오 실행 — 대화 중 문제 재현 |
 | `scenarios/chat_scenarios.json` | 운영 문제 유형별 대화 시나리오 16개 |
 | `docs/baseline_flaws.md` | 허점 지도 — 문제 영역별 코드 위치와 재현 결과 |
 
 ## 알려진 문제 (개선 대상)
-`03_naive_rag.py`, `baseline_agent.py` 는 일부러 단순하게 만든 베이스라인입니다.
+`baseline_rag.py`(A), `baseline_agent.py`(B) 는 일부러 단순하게 만든 베이스라인입니다.
 운영 중 발생하는 문제 15가지(지식검색 · 의도분석 · 시스템연동 · 시스템실행 · 신뢰성 · 보안 · 성능 · 운영)가
 재현되도록 허점을 남겨 두었고, 목록과 위치는 [docs/baseline_flaws.md](docs/baseline_flaws.md) 에 있습니다.
 팀은 이 중 한 영역을 골라 개선합니다.
