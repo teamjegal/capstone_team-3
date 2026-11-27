@@ -220,11 +220,15 @@ def run_agent(query, customer_id, history=None, max_turns=10, temperature=0.7, v
                              "content": json.dumps(result, ensure_ascii=False, default=str)})
     # [허점-07 데이터정합성] 최종 답변을 도구 결과와 대조하는 검증 단계 없음
     # [허점-14 문제추적] trace 를 파일로 남기지 않음 (어떤 문서·도구 결과 때문에 틀렸는지 사후 추적 불가)
+    if answer is not None:
+        messages.append({"role": "assistant", "content": answer})
     return {
         "answer": answer,
         "tool_calls": trace,
         "usage": usage,
         "latency_s": round(time.time() - t0, 2),
+        # 대화 모드에서 다음 턴 history 로 쓰는 전체 메시지 (system 제외, 도구 결과 포함)
+        "messages": messages[1:],
     }
 
 
@@ -250,9 +254,10 @@ def chat(customer_id):
             break
         out = run_agent(query, customer_id, history=history, verbose=True)
         _print_result(out)
-        # [허점-12] 도구 호출 결과는 history 에 남기지 않음 — 다음 턴에서 같은 조회를 반복하기 쉬움
-        history += [{"role": "user", "content": query},
-                    {"role": "assistant", "content": out["answer"] or ""}]
+        # [허점-13 비용·지연] 도구 결과(주문 전체 JSON 등)까지 포함한 대화 전체를 요약·절삭 없이 계속 누적
+        #   → 턴이 늘수록 input token · 응답 시간이 계속 증가
+        # [허점-11] 앞 턴에서 들어온 악성 지시(사용자 입력 · 검색 문서)도 그대로 다음 턴에 남음
+        history = out["messages"]
 
 
 if __name__ == "__main__":
