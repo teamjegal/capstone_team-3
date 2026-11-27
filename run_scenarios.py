@@ -2,6 +2,7 @@
 
     uv run python run_scenarios.py              # 전체 시나리오
     uv run python run_scenarios.py S07 S11      # 일부만
+    uv run python run_scenarios.py --agent secure S11 S12 S13   # 보안 개선 에이전트로 실행
 
 scenarios/chat_scenarios.json 의 각 시나리오를 --chat 대화 모드와 같은 방식(이전 턴을 history 로 전달)으로 실행하고,
 턴별 도구 호출 · 답변 · 토큰 · 지연을 출력한 뒤 results/scenarios_<시각>.jsonl 에 저장한다.
@@ -12,16 +13,26 @@ import pathlib
 import sys
 import time
 
-from baseline_agent import run_agent
+AGENT = "secure" if "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "secure" else "baseline"
+if AGENT == "secure":
+    from secure_agent import run_agent as _secure_run
+
+    def run_agent(q, customer, history=None, key=None):
+        return _secure_run(q, customer, history=history, session_key=key)
+else:
+    from baseline_agent import run_agent as _base_run
+
+    def run_agent(q, customer, history=None, key=None):
+        return _base_run(q, customer, history=history)
 
 SCENARIO_FILE = pathlib.Path("scenarios/chat_scenarios.json")
 
 
-def run_scenario(sc):
+def run_scenario(sc, key=None):
     history, turns = [], []
     for q in sc["turns"]:
         try:
-            out = run_agent(q, sc["customer"], history=history)
+            out = run_agent(q, sc["customer"], history=history, key=key)
             err = None
         except Exception as e:  # 도구 장애 등으로 대화가 중단되는 경우도 기록
             out, err = {"answer": None, "tool_calls": [], "usage": {}, "latency_s": None}, f"{type(e).__name__}: {e}"
@@ -35,6 +46,8 @@ def run_scenario(sc):
             break  # 실제 서비스라면 여기서 대화가 끊김
         u = out["usage"]
         print(f"  [답변] {out['answer']}")
+        if out.get("security", {}).get("blocked_by"):
+            print(f"    [보안] {out['security']['blocked_by']} · 누적 {out['security']['flags']}회")
         print(f"    ({out['latency_s']}초 · LLM {u['llm_calls']}회 · input {u['prompt_tokens']} token)")
         history = messages  # --chat 모드와 동일하게 도구 결과까지 전부 누적
     return turns
@@ -42,12 +55,13 @@ def run_scenario(sc):
 
 def main():
     scenarios = json.loads(SCENARIO_FILE.read_text(encoding="utf-8"))
-    if sys.argv[1:]:
-        scenarios = [s for s in scenarios if s["id"] in sys.argv[1:]]
+    ids = [x for x in sys.argv[1:] if x not in ("--agent", "secure", "baseline")]
+    if ids:
+        scenarios = [s for s in scenarios if s["id"] in ids]
 
     out_dir = pathlib.Path("results")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"scenarios_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    out_path = out_dir / f"scenarios_{AGENT}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
     with out_path.open("w", encoding="utf-8") as f:
         for sc in scenarios:
             for r in range(sc.get("repeat", 1)):
@@ -55,7 +69,7 @@ def main():
                 print(f"{sc['id']} [{sc['area']}] {sc['problem']} · 고객 {sc['customer']}"
                       + (f" · 반복 {r + 1}/{sc['repeat']}" if sc.get("repeat", 1) > 1 else ""))
                 print(f"  확인할 점: {sc['watch']}")
-                turns = run_scenario(sc)
+                turns = run_scenario(sc, key=f"{sc['id']}#{r}")
                 f.write(json.dumps({**sc, "run": r, "result": turns}, ensure_ascii=False) + "\n")
     print(f"\n저장: {out_path}")
 

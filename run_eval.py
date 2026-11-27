@@ -3,6 +3,7 @@
     uv run python run_eval.py                    # 공개 평가셋 30개 전체
     uv run python run_eval.py --ids PUB-001 PUB-017
     uv run python run_eval.py --ids PUB-001 --repeat 3   # 실행 일관성(비결정성) 확인
+    uv run python run_eval.py --agent secure     # 보안 개선 에이전트(secure_agent.py)로 같은 평가
 
 결과는 results/eval_<시각>.jsonl 에 케이스별로 저장된다.
 채점은 단순 문자열 포함 여부 + 도구 이름 비교라서 참고용 지표다.
@@ -13,7 +14,22 @@ import pathlib
 import time
 import traceback
 
-from baseline_agent import run_agent
+
+def load_agent(name):
+    """--agent baseline | secure — 두 에이전트를 같은 평가 코드로 비교"""
+    if name == "secure":
+        import secure_agent
+
+        def run(case, r):
+            sess = case["session"]
+            now = sess.get("now") or (sess.get("now_window") or [None])[0]
+            return secure_agent.run_agent(case["query"], sess["customer_id"], history=case.get("conversation_history"),
+                                          now=now, authenticated=sess.get("authenticated", True),
+                                          session_key=f"{case['id']}#{r}")
+        return run
+    from baseline_agent import run_agent
+    return lambda case, r: run_agent(case["query"], case["session"]["customer_id"],
+                                     history=case.get("conversation_history"))
 
 
 def find_eval_file():
@@ -44,7 +60,9 @@ def main():
     ap.add_argument("--ids", nargs="*", help="실행할 케이스 id (생략 시 전체)")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--agent", choices=["baseline", "secure"], default="baseline")
     a = ap.parse_args()
+    run = load_agent(a.agent)
 
     cases = [json.loads(l) for l in find_eval_file().read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.ids:
@@ -54,15 +72,14 @@ def main():
 
     out_dir = pathlib.Path("results")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"eval_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    out_path = out_dir / f"eval_{a.agent}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
 
     rows = []
     with out_path.open("w", encoding="utf-8") as f:
         for case in cases:
             for r in range(a.repeat):
                 try:
-                    out = run_agent(case["query"], case["session"]["customer_id"],
-                                    history=case.get("conversation_history"))
+                    out = run(case, r)
                     out.pop("messages", None)
                     err = None
                 except Exception as e:  # 에이전트 크래시도 결과로 기록
@@ -70,7 +87,7 @@ def main():
                         f"{type(e).__name__}: {e}"
                     traceback.print_exc()
                 s = score(case, out) if err is None else {}
-                row = {"id": case["id"], "run": r, "category": case["category"], "query": case["query"],
+                row = {"id": case["id"], "agent": a.agent, "run": r, "category": case["category"], "query": case["query"],
                        "error": err, **out, "score": s, "trap": case.get("trap")}
                 rows.append(row)
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
