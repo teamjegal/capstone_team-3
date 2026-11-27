@@ -1,0 +1,26 @@
+# 비밀 값 — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+
+# 데이터셋 (배포 zip 을 각자 풀어서 사용)
+data/
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Vector DB / 캐시
+chroma_db/
+*.faiss
+.cache/
+
+# 에디터 · OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
