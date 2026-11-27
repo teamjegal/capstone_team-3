@@ -40,10 +40,11 @@ curl.exe http://localhost:8000/v1/models -H "Authorization: Bearer <API키>"
 배포된 `data.zip` 을 프로젝트 폴더에 풀어 `data/` 가 아래처럼 되게 합니다. (`data/` 는 git 에 올리지 않고 각자 배치)
 ```
 data/
-├── eval_public.jsonl  ← 공개 평가셋 30개
 ├── knowledge/         ← 정책 문서 5개(.md), faq.json, consultation_history.json
-└── system/            ← products, customers, orders, shipments, coupons, product_return_conditions
+├── system/            ← products, customers, orders, shipments, coupons, product_return_conditions
+└── eval/              ← eval_public.jsonl (공개 평가셋 30개)
 ```
+> 배포 zip 에는 `eval_public.jsonl` 이 `data/` 바로 아래에 들어 있으니 `data/eval/` 로 옮겨 주세요.
 
 ### 6. 예제 실행
 ```powershell
