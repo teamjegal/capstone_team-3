@@ -2,6 +2,7 @@
 
     uv run python run_eval.py                    # Baseline B (Naive Agent), 공개 평가셋 30개
     uv run python run_eval.py --system a         # Baseline A (Naive RAG)
+    uv run python run_eval.py --system secure    # 보안 개선 에이전트(secure_agent.py) — `--agent secure` 도 동일
     uv run python run_eval.py --ids PUB-001 PUB-017
     uv run python run_eval.py --ids PUB-001 --repeat 3   # 실행 일관성(비결정성) 확인
 
@@ -15,13 +16,29 @@ import time
 import traceback
 
 
+SYSTEM_NAMES = {"a": "Baseline A (Naive RAG)", "b": "Baseline B (Naive Agent)", "secure": "Secure Agent (보안 개선)"}
+
+
 def load_system(name):
-    """평가할 시스템의 실행 함수 — (query, customer_id, history) 를 받아 결과 dict 를 돌려줘야 한다."""
+    """평가할 시스템의 실행 함수 — run(case, r) 형태로 결과 dict 를 돌려준다.
+    a: baseline_rag · b: baseline_agent · secure: secure_agent"""
     if name == "a":
         from baseline_rag import run_rag
-        return run_rag
+        return lambda case, r: run_rag(case["query"], case["session"]["customer_id"],
+                                       history=case.get("conversation_history"))
+    if name == "secure":
+        import secure_agent
+
+        def run(case, r):
+            sess = case["session"]
+            now = sess.get("now") or (sess.get("now_window") or [None])[0]
+            return secure_agent.run_agent(case["query"], sess["customer_id"], history=case.get("conversation_history"),
+                                          now=now, authenticated=sess.get("authenticated", True),
+                                          session_key=f"{case['id']}#{r}")
+        return run
     from baseline_agent import run_agent
-    return run_agent
+    return lambda case, r: run_agent(case["query"], case["session"]["customer_id"],
+                                     history=case.get("conversation_history"))
 
 
 def find_eval_file():
@@ -52,9 +69,12 @@ def main():
     ap.add_argument("--ids", nargs="*", help="실행할 케이스 id (생략 시 전체)")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--repeat", type=int, default=1)
-    ap.add_argument("--system", choices=["a", "b"], default="b", help="a: Naive RAG, b: Naive Agent (기본)")
+    ap.add_argument("--system", choices=["a", "b", "secure"],
+                    help="a: Naive RAG, b: Naive Agent (기본), secure: 보안 개선 에이전트")
+    ap.add_argument("--agent", choices=["baseline", "secure"], help="이전 옵션 이름 (baseline=b, secure=secure)")
     a = ap.parse_args()
-    run_agent = load_system(a.system)
+    a.system = a.system or {"baseline": "b", "secure": "secure"}.get(a.agent, "b")
+    run = load_system(a.system)
 
     cases = [json.loads(l) for l in find_eval_file().read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.ids:
@@ -71,8 +91,7 @@ def main():
         for case in cases:
             for r in range(a.repeat):
                 try:
-                    out = run_agent(case["query"], case["session"]["customer_id"],
-                                    history=case.get("conversation_history"))
+                    out = run(case, r)
                     out.pop("messages", None)
                     err = None
                 except Exception as e:  # 에이전트 크래시도 결과로 기록
@@ -80,7 +99,7 @@ def main():
                         f"{type(e).__name__}: {e}"
                     traceback.print_exc()
                 s = score(case, out) if err is None else {}
-                row = {"id": case["id"], "run": r, "category": case["category"], "query": case["query"],
+                row = {"id": case["id"], "system": a.system, "run": r, "category": case["category"], "query": case["query"],
                        "error": err, **out, "score": s, "trap": case.get("trap")}
                 rows.append(row)
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -90,7 +109,7 @@ def main():
                 print(f"{case['id']}#{r} [{case['category']}] {status} · {out['latency_s']}s · {tools}")
 
     ok = [r for r in rows if not r["error"]]
-    print(f"\n===== 요약 (Baseline {a.system.upper()}) =====")
+    print(f"\n===== 요약 ({SYSTEM_NAMES[a.system]}) =====")
     print(f"케이스 {len(rows)} · 크래시 {len(rows) - len(ok)}")
     if ok:
         full = sum(1 for r in ok if not r["score"]["must_include_miss"] and not r["score"]["must_not_include_violated"])

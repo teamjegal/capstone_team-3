@@ -125,11 +125,22 @@ uv run python run_eval.py --ids PUB-001 --repeat 5                       # 같�
 uv run python run_scenarios.py                                           # 문제 유형별 대화 시나리오 16개
 uv run python run_scenarios.py S11 S12                                   # 일부 시나리오만
 ```
+
 ### A · B 비교 대화
 ```powershell
 uv run python compare_chat.py --customer C0001
 ```
 질문 하나를 입력하면 Baseline A 와 B 가 차례로 답합니다 (대화 기록은 각자 유지, `--customer` 는 B 만 사용).
+
+### 보안 개선 (3조 개선 영역)
+```powershell
+uv run python security_check.py                                 # LLM 서버 없이 Baseline vs Secure 공격 비교표
+uv run python -m unittest tests/test_security.py -v             # 보안 단위 테스트
+uv run python secure_agent.py --chat --customer C0001           # 보안 개선 에이전트 대화 모드
+uv run python run_eval.py --system secure                       # 같은 평가셋을 개선 에이전트로 (--agent secure 도 동일)
+uv run python run_scenarios.py --agent secure S11 S12 S13       # 보안 시나리오
+```
+설계와 결과는 [docs/security_design.md](docs/security_design.md) 에 정리했습니다. 보안 이벤트는 `results/security_log.jsonl` 에 남습니다.
 
 `--customer` 는 로그인한 고객 ID(세션)입니다 (C0001 ~ C0050).
 결과는 `results/` 에 jsonl 로 저장됩니다 (git 제외).
@@ -154,6 +165,11 @@ uv run python compare_chat.py --customer C0001
 | `run_scenarios.py` | 멀티턴 대화 시나리오 실행 — 대화 중 문제 재현 |
 | `scenarios/chat_scenarios.json` | 운영 문제 유형별 대화 시나리오 16개 |
 | `docs/baseline_flaws.md` | 허점 지도 — 문제 영역별 코드 위치와 재현 결과 |
+| `security_guard.py` | 보안 계층 — 입력 가드 · 문서 신뢰 필터/정화 · 출력 가드 · 보안 로그 (LLM 없이 동작) |
+| `secure_agent.py` | 보안 개선 에이전트 — 세션 바인딩 도구 게이트웨이 + 다층 방어 (허점-10 · 11 개선) |
+| `security_check.py` | 오프라인 보안 점검 — '속은 LLM' 가정으로 Baseline vs Secure 누출 비교 |
+| `tests/test_security.py` | 보안 단위 테스트 |
+| `docs/security_design.md` | 보안 개선 설계 — 원인 · 문제 · 해결 · 효과 · 트레이드오프 |
 
 ## 알려진 문제 (개선 대상)
 `baseline_rag.py`(A), `baseline_agent.py`(B) 는 일부러 단순하게 만든 베이스라인입니다.
