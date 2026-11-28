@@ -9,6 +9,7 @@ scenarios/chat_scenarios.json 의 각 시나리오를 --chat 대화 모드와 �
 문제가 실제로 재현됐는지는 각 시나리오의 'watch' 항목을 보고 사람이 판단한다.
 """
 import json
+import os
 import sys as _sys
 if hasattr(_sys.stdout, "reconfigure"):  # Windows 콘솔(cp949)에서 한글·특수문자 출력 크래시 방지
     _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -64,7 +65,7 @@ def main():
 
     out_dir = pathlib.Path("results")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"scenarios_{AGENT}_{time.strftime('%Y%m%d_%H%M%S')}.jsonl"
+    out_path = out_dir / f"scenarios_{AGENT}_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.jsonl"  # 동시 실행 시 파일명 충돌 방지
     with out_path.open("w", encoding="utf-8") as f:
         for sc in scenarios:
             for r in range(sc.get("repeat", 1)):

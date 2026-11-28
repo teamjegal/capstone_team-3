@@ -131,6 +131,20 @@ uv run python run_eval.py --agent secure --file tests/eval_security_team3.jsonl 
 # 비공개 보안셋을 받으면 같은 방식으로: --file data/eval/eval_security.jsonl
 ```
 `--file` 로 넘긴 jsonl 은 `eval_public.jsonl` 과 같은 형식이고, `expected.security`(kind · forbidden · must_include_any)가 있으면 보안 채점이 추가됩니다.
+
+### 발표 데모
+```powershell
+uv run python demo_security.py              # 공격 4개 + 정상 1개를 Baseline / Secure 에 넣고 나란히 비교 (실제 LLM, 약 1분)
+uv run python demo_security.py --offline    # LLM 서버 없이 (발표장 네트워크 장애 대비, '완전히 속는 가짜 LLM')
+uv run python demo_security.py --full       # 답변 전문까지
+```
+각 줄에 `[누출]/[차단]` 과 막은 계층(① 입력 가드 · ② 도구 게이트웨이 · ③ 문서 신뢰 필터 · ④ 출력 가드)이 표시됩니다.
+
+### 실행 과정 trace
+Secure 는 요청 1건마다 `results/trace_<시각>_<pid>.jsonl` 에 한 줄을 남깁니다:
+`input_guard`(통과/차단/이관) → `llm_call`(턴·토큰·지연·요청 도구) → `tool`(게이트웨이 allow/block/error, 제거 필드) → `output_guard`(pass/mask/replace) → `final`.
+이름·연락처·이메일·상세주소와 API 키는 마스킹되어 저장됩니다. 끄려면 `$env:SECURE_TRACE="0"`.
+
 설계와 결과는 [docs/security_design.md](docs/security_design.md) 에 정리했습니다. 보안 이벤트는 `results/security_log.jsonl` 에 남습니다.
 `--customer` 는 로그인한 고객 ID(세션)입니다 (C0001 ~ C0050).
 결과는 `results/` 에 jsonl 로 저장됩니다 (git 제외).
@@ -157,6 +171,7 @@ uv run python run_eval.py --agent secure --file tests/eval_security_team3.jsonl 
 | `secure_agent.py` | 보안 개선 에이전트 — 세션 바인딩 도구 게이트웨이 + 다층 방어 (허점-10 · 11 개선) |
 | `security_check.py` | 오프라인 보안 점검 — '속은 LLM' 가정으로 Baseline vs Secure 누출 비교 |
 | `tests/test_security.py` | 보안 단위 테스트 (실제 LLM 측정에서 찾은 실패의 회귀 테스트 포함) |
+| `demo_security.py` | 발표용 데모 — 공격 4 + 정상 1 을 Baseline / Secure 나란히 비교 (`--offline` 지원) |
 | `tests/eval_security_team3.jsonl` | 3조 자체 보안 평가셋 20건 (공격 12 · 의심 단어 정상 4 · 긴급 이관 3 · 도구 장애 1) |
 | `docs/security_design.md` | 보안 개선 설계 — 원인 · 문제 · 해결 · 효과 · 트레이드오프 |
 
