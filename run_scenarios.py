@@ -2,7 +2,8 @@
 
     uv run python run_scenarios.py              # 전체 시나리오
     uv run python run_scenarios.py S07 S11      # 일부만
-    uv run python run_scenarios.py --agent secure S11 S12 S13   # 보안 개선 에이전트로 실행
+    uv run python run_scenarios.py --agent improved S11 S12 S13 # 개선 에이전트로 실행
+    uv run python run_scenarios.py --agent secure S11 S12 S13   # 코드 가드 방식으로 실행
 
 scenarios/chat_scenarios.json 의 각 시나리오를 --chat 대화 모드와 같은 방식(이전 턴을 history 로 전달)으로 실행하고,
 턴별 도구 호출 · 답변 · 토큰 · 지연을 출력한 뒤 results/scenarios_<시각>.jsonl 에 저장한다.
@@ -17,8 +18,13 @@ import pathlib
 import sys
 import time
 
-AGENT = "secure" if "--agent" in sys.argv and sys.argv[sys.argv.index("--agent") + 1] == "secure" else "baseline"
-if AGENT == "secure":
+AGENT = sys.argv[sys.argv.index("--agent") + 1] if "--agent" in sys.argv else "baseline"
+if AGENT == "improved":
+    from improved_agent import run_agent as _improved_run
+
+    def run_agent(q, customer, history=None, key=None):
+        return _improved_run(q, customer, history=history)
+elif AGENT == "secure":
     from secure_agent import run_agent as _secure_run
 
     def run_agent(q, customer, history=None, key=None):
@@ -59,7 +65,7 @@ def run_scenario(sc, key=None):
 
 def main():
     scenarios = json.loads(SCENARIO_FILE.read_text(encoding="utf-8"))
-    ids = [x for x in sys.argv[1:] if x not in ("--agent", "secure", "baseline")]
+    ids = [x for x in sys.argv[1:] if x not in ("--agent", "secure", "baseline", "improved")]
     if ids:
         scenarios = [s for s in scenarios if s["id"] in ids]
 

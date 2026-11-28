@@ -2,7 +2,8 @@
 
     uv run python run_eval.py                    # Baseline B (Naive Agent), 공개 평가셋 30개
     uv run python run_eval.py --system a         # Baseline A (Naive RAG)
-    uv run python run_eval.py --system secure    # 보안 개선 에이전트(secure_agent.py) — `--agent secure` 도 동일
+    uv run python run_eval.py --system improved  # 개선 에이전트(improved_agent.py)
+    uv run python run_eval.py --system secure    # 코드 가드 방식(secure_agent.py) — `--agent secure` 도 동일
     uv run python run_eval.py --ids PUB-001 PUB-017
     uv run python run_eval.py --ids PUB-001 --repeat 3   # 실행 일관성(비결정성) 확인
     uv run python run_eval.py --system secure --file tests/eval_security_team3.jsonl   # 3조 자체 보안셋 (누출·차단·오탐·이관 자동 판정)
@@ -21,7 +22,8 @@ import time
 import traceback
 
 
-SYSTEM_NAMES = {"a": "Baseline A (Naive RAG)", "b": "Baseline B (Naive Agent)", "secure": "Secure Agent (보안 개선)"}
+SYSTEM_NAMES = {"a": "Baseline A (Naive RAG)", "b": "Baseline B (Naive Agent)", "secure": "Secure Agent (코드 가드)",
+                "improved": "Improved Agent (의도 분석 · Tool Calling · RAG 개선)"}
 
 
 def load_system(name):
@@ -31,6 +33,15 @@ def load_system(name):
         from baseline_rag import run_rag
         return lambda case, r: run_rag(case["query"], case["session"]["customer_id"],
                                        history=case.get("conversation_history"))
+    if name == "improved":
+        import improved_agent
+
+        def run_improved(case, r):
+            sess = case["session"]
+            now = sess.get("now") or (sess.get("now_window") or [None])[0]
+            return improved_agent.run_agent(case["query"], sess["customer_id"],
+                                            history=case.get("conversation_history"), now=now)
+        return run_improved
     if name == "secure":
         import secure_agent
 
@@ -117,8 +128,8 @@ def main():
     ap.add_argument("--ids", nargs="*", help="실행할 케이스 id (생략 시 전체)")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--repeat", type=int, default=1)
-    ap.add_argument("--system", choices=["a", "b", "secure"],
-                    help="a: Naive RAG, b: Naive Agent (기본), secure: 보안 개선 에이전트")
+    ap.add_argument("--system", choices=["a", "b", "secure", "improved"],
+                    help="a: Naive RAG, b: Naive Agent (기본), secure: 코드 가드, improved: 개선 에이전트")
     ap.add_argument("--agent", choices=["baseline", "secure"], help="이전 옵션 이름 (baseline=b, secure=secure)")
     ap.add_argument("--file", help="평가셋 jsonl 경로 (기본: data/eval_public.jsonl)")
     a = ap.parse_args()
