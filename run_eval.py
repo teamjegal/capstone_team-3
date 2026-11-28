@@ -1,12 +1,13 @@
 """평가 데이터셋으로 Baseline Agent 를 돌려 문제를 재현 · 측정한다.
 
-    uv run python run_eval.py                    # 공개 평가셋 30개 전체
+    uv run python run_eval.py                    # Baseline B (Naive Agent), 공개 평가셋 30개
+    uv run python run_eval.py --system a         # Baseline A (Naive RAG)
+    uv run python run_eval.py --system secure    # 보안 개선 에이전트(secure_agent.py) — `--agent secure` 도 동일
     uv run python run_eval.py --ids PUB-001 PUB-017
     uv run python run_eval.py --ids PUB-001 --repeat 3   # 실행 일관성(비결정성) 확인
-    uv run python run_eval.py --agent secure     # 보안 개선 에이전트(secure_agent.py)로 같은 평가
-    uv run python run_eval.py --agent secure --file tests/eval_security_team3.jsonl   # 3조 자체 보안셋 (누출·차단·오탐·이관 자동 판정)
+    uv run python run_eval.py --system secure --file tests/eval_security_team3.jsonl   # 3조 자체 보안셋 (누출·차단·오탐·이관 자동 판정)
 
-결과는 results/eval_<시각>.jsonl 에 케이스별로 저장된다.
+결과는 results/eval_<시스템>[_<평가셋>]_<시각>_<pid>.jsonl 에 케이스별로 저장된다.
 채점은 단순 문자열 포함 여부 + 도구 이름 비교라서 참고용 지표다.
 """
 import argparse
@@ -20,8 +21,16 @@ import time
 import traceback
 
 
-def load_agent(name):
-    """--agent baseline | secure — 두 에이전트를 같은 평가 코드로 비교"""
+SYSTEM_NAMES = {"a": "Baseline A (Naive RAG)", "b": "Baseline B (Naive Agent)", "secure": "Secure Agent (보안 개선)"}
+
+
+def load_system(name):
+    """평가할 시스템의 실행 함수 — run(case, r) 형태로 결과 dict 를 돌려준다.
+    a: baseline_rag · b: baseline_agent · secure: secure_agent"""
+    if name == "a":
+        from baseline_rag import run_rag
+        return lambda case, r: run_rag(case["query"], case["session"]["customer_id"],
+                                       history=case.get("conversation_history"))
     if name == "secure":
         import secure_agent
 
@@ -108,10 +117,13 @@ def main():
     ap.add_argument("--ids", nargs="*", help="실행할 케이스 id (생략 시 전체)")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--repeat", type=int, default=1)
-    ap.add_argument("--agent", choices=["baseline", "secure"], default="baseline")
+    ap.add_argument("--system", choices=["a", "b", "secure"],
+                    help="a: Naive RAG, b: Naive Agent (기본), secure: 보안 개선 에이전트")
+    ap.add_argument("--agent", choices=["baseline", "secure"], help="이전 옵션 이름 (baseline=b, secure=secure)")
     ap.add_argument("--file", help="평가셋 jsonl 경로 (기본: data/eval_public.jsonl)")
     a = ap.parse_args()
-    run = load_agent(a.agent)
+    a.system = a.system or {"baseline": "b", "secure": "secure"}.get(a.agent, "b")
+    run = load_system(a.system)
 
     cases = [json.loads(l) for l in (pathlib.Path(a.file) if a.file else find_eval_file()).read_text(encoding="utf-8").splitlines() if l.strip()]
     if a.ids:
@@ -123,7 +135,7 @@ def main():
     out_dir.mkdir(exist_ok=True)
     tag = f"_{pathlib.Path(a.file).stem}" if a.file else ""
     # 동시에 여러 평가를 돌려도 결과 파일이 겹치지 않도록 PID 를 붙인다
-    out_path = out_dir / f"eval_{a.agent}{tag}_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.jsonl"
+    out_path = out_dir / f"eval_{a.system}{tag}_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.jsonl"
 
     rows = []
     with out_path.open("w", encoding="utf-8") as f:
@@ -139,7 +151,7 @@ def main():
                     traceback.print_exc()
                 s = score(case, out) if err is None else {}
                 sec = security_score(case, out, err)
-                row = {"id": case["id"], "agent": a.agent, "run": r, "category": case["category"], "query": case["query"],
+                row = {"id": case["id"], "system": a.system, "run": r, "category": case["category"], "query": case["query"],
                        "error": err, **out, "score": s, "security_score": sec, "trap": case.get("trap")}
                 rows.append(row)
                 f.write(json.dumps(row, ensure_ascii=False) + "\n")
@@ -151,7 +163,7 @@ def main():
                 print(f"{case['id']}#{r} [{case['category']}] {status} · {out['latency_s']}s · {tools}")
 
     ok = [r for r in rows if not r["error"]]
-    print("\n===== 요약 =====")
+    print(f"\n===== 요약 ({SYSTEM_NAMES[a.system]}) =====")
     print(f"케이스 {len(rows)} · 크래시 {len(rows) - len(ok)}")
     if ok:
         full = sum(1 for r in ok if not r["score"]["must_include_miss"] and not r["score"]["must_not_include_violated"])
@@ -173,7 +185,7 @@ def main():
         print("실패:", ", ".join(fails) or "없음")
     if a.file is None:
         fp = [r["id"] for r in ok if str((r.get("security") or {}).get("blocked_by") or "").startswith("input")]
-        if a.agent == "secure":
+        if a.system == "secure":
             print(f"입력 가드 오탐(정상 질문 차단): {len(fp)}건 {fp}")
     print(f"저장: {out_path}")
 
