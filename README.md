@@ -122,9 +122,15 @@ uv run python run_scenarios.py S11 S12                                   # 일�
 uv run python security_check.py                                 # LLM 서버 없이 Baseline vs Secure 공격 비교표
 uv run python -m unittest tests/test_security.py -v             # 보안 단위 테스트
 uv run python secure_agent.py --chat --customer C0001           # 보안 개선 에이전트 대화 모드
-uv run python run_eval.py --agent secure                        # 같은 평가셋을 개선 에이전트로
+uv run python run_eval.py --agent secure                        # 같은 평가셋을 개선 에이전트로 (끝에 입력 가드 오탐 수 출력)
 uv run python run_scenarios.py --agent secure S11 S12 S13       # 보안 시나리오
+
+# 3조 자체 보안 평가셋 20건 — 누출 · 차단 · 오탐 · 긴급 이관을 자동 채점
+uv run python run_eval.py --file tests/eval_security_team3.jsonl                 # Baseline
+uv run python run_eval.py --agent secure --file tests/eval_security_team3.jsonl  # Secure
+# 비공개 보안셋을 받으면 같은 방식으로: --file data/eval/eval_security.jsonl
 ```
+`--file` 로 넘긴 jsonl 은 `eval_public.jsonl` 과 같은 형식이고, `expected.security`(kind · forbidden · must_include_any)가 있으면 보안 채점이 추가됩니다.
 설계와 결과는 [docs/security_design.md](docs/security_design.md) 에 정리했습니다. 보안 이벤트는 `results/security_log.jsonl` 에 남습니다.
 `--customer` 는 로그인한 고객 ID(세션)입니다 (C0001 ~ C0050).
 결과는 `results/` 에 jsonl 로 저장됩니다 (git 제외).
@@ -150,7 +156,8 @@ uv run python run_scenarios.py --agent secure S11 S12 S13       # 보안 시나�
 | `security_guard.py` | 보안 계층 — 입력 가드 · 문서 신뢰 필터/정화 · 출력 가드 · 보안 로그 (LLM 없이 동작) |
 | `secure_agent.py` | 보안 개선 에이전트 — 세션 바인딩 도구 게이트웨이 + 다층 방어 (허점-10 · 11 개선) |
 | `security_check.py` | 오프라인 보안 점검 — '속은 LLM' 가정으로 Baseline vs Secure 누출 비교 |
-| `tests/test_security.py` | 보안 단위 테스트 |
+| `tests/test_security.py` | 보안 단위 테스트 (실제 LLM 측정에서 찾은 실패의 회귀 테스트 포함) |
+| `tests/eval_security_team3.jsonl` | 3조 자체 보안 평가셋 20건 (공격 12 · 의심 단어 정상 4 · 긴급 이관 3 · 도구 장애 1) |
 | `docs/security_design.md` | 보안 개선 설계 — 원인 · 문제 · 해결 · 효과 · 트레이드오프 |
 
 ## 알려진 문제 (개선 대상)

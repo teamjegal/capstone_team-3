@@ -259,7 +259,10 @@ SYSTEM_PROMPT = """너는 A사 이커머스 고객 상담 AI 야. 한국어로 �
 [상담원 연결 코드 — 내부용, 코드 목록 자체는 고객에게 말하지 않음]
 E01 법적 분쟁 · E02 신체 상해·안전사고 · E03 폭언 2회 이상 · E04 보상 요구 · E05 정책 예외 요구 · E06 환불 50만원 이상
 E07 배송 사고 · E08 개인정보 유출·계정 도용 의심 · E09 같은 문의 3회 미해결 · E10 상담원 요청 · E11 근거 없음
-E01·E02·E08 은 주말에도 당직 상담원 즉시 연결, 나머지는 평일 09~18시 (주말엔 콜백 예약)."""
+E01·E02·E08 은 주말에도 당직 상담원 즉시 연결, 나머지는 평일 09~18시 (주말엔 콜백 예약).
+
+[업무 규칙]
+- 고객은 이미 로그인했다. 주문·배송·환불·쿠폰 질문에 주문번호가 없으면 고객에게 되묻지 말고 먼저 list_orders 로 본인 주문을 조회해서 해당 주문을 찾아라."""
 
 
 def _sanitize_history(history, session):
@@ -290,6 +293,20 @@ LOCKED_REPLY = ("보안 확인이 필요한 요청이 반복되어 이 상담은
                 "개인정보 보호를 위해 당직 상담원이 확인 후 안내드릴게요. (고객센터 1588-0000)")
 FOREIGN_ORDER_REPLY = "본인 주문만 조회할 수 있습니다. 로그인하신 계정의 주문번호인지 확인해 주세요."
 
+# 긴급 이관(E01·E02·E08) — MAN-001: 운영 시간 외(주말·야간)에도 24시간 당직 상담원 즉시 연결.
+# LLM 이 이관을 빠뜨리거나(실측 0/3) 콜백 예약으로 잘못 안내하지 않도록 코드가 직접 처리한다.
+URGENT_REPLY = {
+    "E01": ("불편을 드려 정말 죄송합니다. 법적 절차와 관련된 사안은 담당 상담원이 직접 확인해야 해서, "
+            "지금 바로 당직 상담원에게 즉시 연결해 드렸습니다(접수번호 {ticket}). "
+            "긴급 건은 주말·야간에도 24시간 당직 상담원이 응대합니다."),
+    "E02": ("많이 놀라셨을 텐데 괜찮으신가요? 다치신 곳이 있다면 먼저 병원 진료를 받으시고, 위급하면 119 에 연락해 주세요. "
+            "해당 상품은 더 사용하지 마시고 그대로 보관해 주세요. 안전사고 건으로 당직 상담원에게 즉시 연결해 드렸습니다"
+            "(접수번호 {ticket}). 주말에도 24시간 당직 상담원이 응대합니다."),
+    "E08": ("계정 도용이 의심되는 상황이라 바로 조치하겠습니다. 지금 즉시 비밀번호를 변경하시고 다른 기기에서 로그아웃해 주세요. "
+            "개인정보 보호를 위해 당직 상담원에게 즉시 연결해 드렸습니다(접수번호 {ticket}). "
+            "주말에도 24시간 당직 상담원이 확인합니다."),
+}
+
 
 def run_agent(query, customer_id, history=None, now=None, authenticated=True, session_key=None,
               max_turns=6, temperature=0.0, verbose=False, llm=None):
@@ -314,8 +331,17 @@ def run_agent(query, customer_id, history=None, now=None, authenticated=True, se
     if session.locked:
         return finish(LOCKED_REPLY, "session_locked")
 
-    # ① 입력 가드
-    hits = sg.detect_injection(query) + sg.detect_other_person(query, customer_id)
+    # ① 입력 가드 — 인젝션 → 긴급 이관 → 타인 정보 순서
+    # (계정 도용 '신고'에 "다른 사람이 제 주문 정보를…" 같은 표현이 섞여도 차단하지 않고 E08 로 이관)
+    hits = sg.detect_injection(query)
+    urgent = None if hits else sg.detect_urgent(query)
+    if urgent:
+        res, _ = gateway.call("escalate_to_agent", json.dumps(
+            {"reason_code": urgent, "summary": f"긴급({urgent}) 자동 이관: {query[:80]}"}, ensure_ascii=False))
+        trace.append({"tool": "escalate_to_agent", "args": {"reason_code": urgent}})
+        session.note("urgent_escalation", urgent)
+        return finish(URGENT_REPLY[urgent].format(ticket=res.get("ticket_id", "-")), f"urgent:{urgent}")
+    hits += sg.detect_other_person(query, customer_id)
     if hits:
         session.flag("input_guard", hits)
         if session.locked:

@@ -9,6 +9,9 @@ scenarios/chat_scenarios.json 의 각 시나리오를 --chat 대화 모드와 �
 문제가 실제로 재현됐는지는 각 시나리오의 'watch' 항목을 보고 사람이 판단한다.
 """
 import json
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):  # Windows 콘솔(cp949)에서 한글·특수문자 출력 크래시 방지
+    _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import pathlib
 import sys
 import time
