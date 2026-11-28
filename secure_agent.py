@@ -22,6 +22,8 @@ import argparse
 import datetime as dt
 import json
 import os
+import pathlib
+import re
 import secrets
 import time
 
@@ -259,7 +261,10 @@ SYSTEM_PROMPT = """너는 A사 이커머스 고객 상담 AI 야. 한국어로 �
 [상담원 연결 코드 — 내부용, 코드 목록 자체는 고객에게 말하지 않음]
 E01 법적 분쟁 · E02 신체 상해·안전사고 · E03 폭언 2회 이상 · E04 보상 요구 · E05 정책 예외 요구 · E06 환불 50만원 이상
 E07 배송 사고 · E08 개인정보 유출·계정 도용 의심 · E09 같은 문의 3회 미해결 · E10 상담원 요청 · E11 근거 없음
-E01·E02·E08 은 주말에도 당직 상담원 즉시 연결, 나머지는 평일 09~18시 (주말엔 콜백 예약)."""
+E01·E02·E08 은 주말에도 당직 상담원 즉시 연결, 나머지는 평일 09~18시 (주말엔 콜백 예약).
+
+[업무 규칙]
+- 고객은 이미 로그인했다. 주문·배송·환불·쿠폰 질문에 주문번호가 없으면 고객에게 되묻지 말고 먼저 list_orders 로 본인 주문을 조회해서 해당 주문을 찾아라."""
 
 
 def _sanitize_history(history, session):
@@ -286,9 +291,92 @@ def _result(answer, trace, usage, t0, messages, session, blocked_by=None, start_
     }
 
 
+# ---------------------------------------------------------------------------
+# 실행 과정 trace — 요청 1건 = results/trace_<시각>.jsonl 1줄
+#   입력 가드 판정 → LLM 호출 → 도구 호출 · 게이트웨이 판정(허용/차단/필드 제거) → 출력 가드 판정 → 최종 답변
+#   개인정보(이름·연락처·이메일·상세주소)와 API 키는 마스킹해서 남긴다. SECURE_TRACE=0 이면 끈다.
+# ---------------------------------------------------------------------------
+TRACE_PATH = pathlib.Path("results") / f"trace_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.jsonl"
+
+# 게이트웨이가 백엔드 응답에서 빼거나 가리는 필드 (② 필드 최소화) — trace 에 '필드 제거'로 기록
+REDACTED_FIELDS = {
+    "list_orders": ["customer_id", "payment", "shipping_address", "claim", "status_history", "amounts(결제액 외)"],
+    "get_order": ["customer_id", "shipping_address.detail", "shipping_address.recipient(마스킹)"],
+    "get_shipment": ["customer_id"],
+    "list_coupons": ["customer_id"],
+    "get_customer_profile": ["email", "phone", "birth_date", "address", "memo_for_agent", "join_date",
+                             "last_login_at", "marketing_consent", "is_adult_verified", "status"],
+}
+BLOCK_ERRORS = {"ORDER_NOT_ACCESSIBLE", "FORBIDDEN", "LOGIN_REQUIRED"}
+_ID_RE = re.compile(r"^(C\d{4}|ORD-\d{8}-\d{4})$")
+_TRACE_PII = sorted({t for ts in PII_TERMS.values() for t in ts if len(t) >= 2 and not _ID_RE.match(t)},
+                    key=len, reverse=True)
+_KEY_RE = re.compile(r"sk-[A-Za-z0-9_\-]{4,}")
+
+
+def mask_for_trace(obj):
+    """trace 용 마스킹 — API 키 · 고객 이름/상세주소/수령인 · 연락처 · 이메일 (고객·주문 ID 는 디버깅용으로 남김)"""
+    if isinstance(obj, str):
+        s = _KEY_RE.sub("sk-***", obj)
+        key = os.getenv("LLM_API_KEY")
+        if key and len(key) >= 4:
+            s = s.replace(key, "***API_KEY***")
+        for t in _TRACE_PII:
+            if t in s:
+                s = s.replace(t, "***")
+        return sg.mask_pii(s)[0]
+    if isinstance(obj, dict):
+        return {k: mask_for_trace(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [mask_for_trace(v) for v in obj]
+    return obj
+
+
+def gateway_decision(name, result, n_visible_docs=None):
+    """도구 결과 → 게이트웨이 판정 (allow / block / error) + 제거 필드"""
+    err = result.get("error") if isinstance(result, dict) else None
+    if err in BLOCK_ERRORS:
+        return {"decision": "block", "error": err}
+    if err:
+        return {"decision": "error", "error": err}
+    d = {"decision": "allow"}
+    if name in REDACTED_FIELDS:
+        d["fields_removed"] = REDACTED_FIELDS[name]
+    if name == "search_knowledge":
+        d["docs"] = [x.get("doc_id") for x in result] if isinstance(result, list) else []
+        if n_visible_docs is not None:  # ③ 문서 신뢰 필터가 검색 대상에서 뺀 문서 수 (미승인·만료·내부)
+            d["docs_filtered_out"] = len(backend.DOCS) - n_visible_docs
+    return d
+
+
+def write_trace(rec):
+    if os.getenv("SECURE_TRACE", "1") == "0":
+        return
+    try:
+        TRACE_PATH.parent.mkdir(exist_ok=True)
+        with TRACE_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(mask_for_trace(rec), ensure_ascii=False, default=str) + "\n")
+    except OSError:
+        pass  # trace 실패가 상담을 막지 않도록
+
+
 LOCKED_REPLY = ("보안 확인이 필요한 요청이 반복되어 이 상담은 상담원 검토로 전환되었습니다. "
                 "개인정보 보호를 위해 당직 상담원이 확인 후 안내드릴게요. (고객센터 1588-0000)")
 FOREIGN_ORDER_REPLY = "본인 주문만 조회할 수 있습니다. 로그인하신 계정의 주문번호인지 확인해 주세요."
+
+# 긴급 이관(E01·E02·E08) — MAN-001: 운영 시간 외(주말·야간)에도 24시간 당직 상담원 즉시 연결.
+# LLM 이 이관을 빠뜨리거나(실측 0/3) 콜백 예약으로 잘못 안내하지 않도록 코드가 직접 처리한다.
+URGENT_REPLY = {
+    "E01": ("불편을 드려 정말 죄송합니다. 법적 절차와 관련된 사안은 담당 상담원이 직접 확인해야 해서, "
+            "지금 바로 당직 상담원에게 즉시 연결해 드렸습니다(접수번호 {ticket}). "
+            "긴급 건은 주말·야간에도 24시간 당직 상담원이 응대합니다."),
+    "E02": ("많이 놀라셨을 텐데 괜찮으신가요? 다치신 곳이 있다면 먼저 병원 진료를 받으시고, 위급하면 119 에 연락해 주세요. "
+            "해당 상품은 더 사용하지 마시고 그대로 보관해 주세요. 안전사고 건으로 당직 상담원에게 즉시 연결해 드렸습니다"
+            "(접수번호 {ticket}). 주말에도 24시간 당직 상담원이 응대합니다."),
+    "E08": ("계정 도용이 의심되는 상황이라 바로 조치하겠습니다. 지금 즉시 비밀번호를 변경하시고 다른 기기에서 로그아웃해 주세요. "
+            "개인정보 보호를 위해 당직 상담원에게 즉시 연결해 드렸습니다(접수번호 {ticket}). "
+            "주말에도 24시간 당직 상담원이 확인합니다."),
+}
 
 
 def run_agent(query, customer_id, history=None, now=None, authenticated=True, session_key=None,
@@ -301,25 +389,49 @@ def run_agent(query, customer_id, history=None, now=None, authenticated=True, se
     start_idx = len(session.events)
     usage = {"llm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
     trace, t0 = [], time.time()
+    steps = []  # 실행 과정 trace (write_trace 로 1줄 기록)
     history = _sanitize_history(history, session)
     base_msgs = history + [{"role": "user", "content": query}]
 
     def finish(answer, blocked_by=None, msgs=None):
         msgs = (msgs or base_msgs) + [{"role": "assistant", "content": answer}]
-        return _result(answer, trace, usage, t0, msgs, session, blocked_by, start_idx)
+        out = _result(answer, trace, usage, t0, msgs, session, blocked_by, start_idx)
+        steps.append({"step": "final", "blocked_by": blocked_by, "answer": answer})
+        write_trace({"at": sg.now_kst().isoformat(timespec="seconds"), "customer_id": customer_id,
+                     "session_key": session_key, "query": query, "steps": steps, "usage": usage,
+                     "latency_s": out["latency_s"], "security_flags": session.flags, "locked": session.locked})
+        return out
+
+    def gw_call(name, raw_args):
+        result, args = gateway.call(name, raw_args)
+        steps.append({"step": "tool", "tool": name, "args": args,
+                      **gateway_decision(name, result, len(gateway.docs))})
+        return result, args
 
     gateway = ToolGateway(customer_id, session, now, authenticated)
 
     # 잠긴 세션 — 더 이상 LLM 을 부르지 않음
     if session.locked:
+        steps.append({"step": "input_guard", "decision": "block", "reason": "session_locked"})
         return finish(LOCKED_REPLY, "session_locked")
 
-    # ① 입력 가드
-    hits = sg.detect_injection(query) + sg.detect_other_person(query, customer_id)
+    # ① 입력 가드 — 인젝션 → 긴급 이관 → 타인 정보 순서
+    # (계정 도용 '신고'에 "다른 사람이 제 주문 정보를…" 같은 표현이 섞여도 차단하지 않고 E08 로 이관)
+    hits = sg.detect_injection(query)
+    urgent = None if hits else sg.detect_urgent(query)
+    if urgent:
+        steps.append({"step": "input_guard", "decision": "escalate", "urgent": urgent})
+        res, _ = gw_call("escalate_to_agent", json.dumps(
+            {"reason_code": urgent, "summary": f"긴급({urgent}) 자동 이관: {query[:80]}"}, ensure_ascii=False))
+        trace.append({"tool": "escalate_to_agent", "args": {"reason_code": urgent}})
+        session.note("urgent_escalation", urgent)
+        return finish(URGENT_REPLY[urgent].format(ticket=res.get("ticket_id", "-")), f"urgent:{urgent}")
+    hits += sg.detect_other_person(query, customer_id)
     if hits:
+        steps.append({"step": "input_guard", "decision": "block", "hits": hits})
         session.flag("input_guard", hits)
         if session.locked:
-            res, _ = gateway.call("escalate_to_agent", json.dumps(
+            gw_call("escalate_to_agent", json.dumps(
                 {"reason_code": "E08", "summary": f"보안 이상 징후 {session.flags}회: {hits}"}))
             trace.append({"tool": "escalate_to_agent", "args": {"reason_code": "E08"}})
             return finish(LOCKED_REPLY, "session_locked")
@@ -327,11 +439,14 @@ def run_agent(query, customer_id, history=None, now=None, authenticated=True, se
 
     mentioned = {m.upper() for m in sg.ORDER_ID_RE.findall(query)}
     if mentioned and not (mentioned & set(gateway.owned_orders)):
+        steps.append({"step": "input_guard", "decision": "block", "hits": ["order_not_owned"],
+                      "orders": sorted(mentioned)})
         for oid in mentioned & gateway.all_orders:
             session.flag("input_foreign_order", oid)
         if session.locked:
             return finish(LOCKED_REPLY, "session_locked")
         return finish(FOREIGN_ORDER_REPLY, "input_order_check")
+    steps.append({"step": "input_guard", "decision": "pass"})
 
     # LLM 루프
     if llm is None:
@@ -342,19 +457,25 @@ def run_agent(query, customer_id, history=None, now=None, authenticated=True, se
     system_prompt = SYSTEM_PROMPT.format(now=sg.format_now(now), customer_id=customer_id, canary=canary)
     messages = [{"role": "system", "content": system_prompt}] + base_msgs
     answer = None
-    for _ in range(max_turns):
+    for turn in range(max_turns):
+        t_llm = time.time()
         resp = llm.chat.completions.create(model=MODEL, messages=messages, tools=SECURE_TOOLS,
                                            temperature=temperature)
         usage["llm_calls"] += 1
-        usage["prompt_tokens"] += getattr(resp.usage, "prompt_tokens", 0) or 0
-        usage["completion_tokens"] += getattr(resp.usage, "completion_tokens", 0) or 0
+        pt = getattr(resp.usage, "prompt_tokens", 0) or 0
+        ct = getattr(resp.usage, "completion_tokens", 0) or 0
+        usage["prompt_tokens"] += pt
+        usage["completion_tokens"] += ct
         msg = resp.choices[0].message
+        steps.append({"step": "llm_call", "turn": turn + 1, "latency_s": round(time.time() - t_llm, 2),
+                      "prompt_tokens": pt, "completion_tokens": ct,
+                      "requested_tools": [c.function.name for c in (msg.tool_calls or [])] or None})
         if not msg.tool_calls:
             answer = msg.content or ""
             break
         messages.append(msg)
         for call in msg.tool_calls:
-            result, args = gateway.call(call.function.name, call.function.arguments)
+            result, args = gw_call(call.function.name, call.function.arguments)
             trace.append({"tool": call.function.name, "args": args,
                           **({"error": result["error"]} if isinstance(result, dict) and "error" in result else {})})
             if verbose:
@@ -376,6 +497,9 @@ def run_agent(query, customer_id, history=None, now=None, authenticated=True, se
         else:
             session.flag(ev)
             blocked = blocked or ev
+    steps.append({"step": "output_guard", "events": chk.events,
+                  "decision": "replace" if blocked else "mask" if chk.events else "pass",
+                  **({"original_answer": answer} if blocked else {})})
     if session.locked and blocked:
         return finish(LOCKED_REPLY, "session_locked", messages[1:])
     return finish(chk.answer, blocked, messages[1:])

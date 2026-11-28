@@ -23,35 +23,83 @@ LOCK_THRESHOLD = 3  # MAN-005 3항
 # ---------------------------------------------------------------------------
 # (라벨, 정규식) — 라벨은 로그와 발표 자료에서 공격 유형 집계에 쓴다
 INJECTION_PATTERNS = [
-    ("ignore_instructions", r"(이전|앞의|앞선|위의|기존|모든|지금까지)[^\n]{0,15}(지시|규칙|명령|설정|프롬프트|정책)[^\n]{0,10}(무시|잊어|따르지\s*마)"),
+    # '잊어버렸어요'(고객 자신의 과거 서술)는 제외하고 명령형만 (T3S-014 오탐)
+    ("ignore_instructions", r"(이전|앞의|앞선|위의|기존|모든|지금까지)[^\n]{0,15}(지시|규칙|명령|설정|프롬프트|정책)[^\n]{0,10}(무시|잊(?!어\s*버렸|었|어버린)|따르지\s*마)"),
+    ("ignore_instructions", r"(앞에서|이전에|지금까지)[^\n]{0,10}(받은|들은|주어진)[^\n]{0,10}(안내|지시|설정)[^\n]{0,10}(없던\s*걸로|무효|취소|무시)"),
+    ("ignore_instructions", r"\b(disregard|forget|override)\b[^\n]{0,30}\b(instructions?|guidance|rules|prompt|configuration)\b"),
     ("ignore_instructions", r"ignore\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)\s+(instructions|rules|prompts?)"),
     ("prompt_leak", r"(시스템\s*프롬프트|system\s*prompt|내부\s*지시|개발자\s*메시지|초기\s*지시|숨겨진\s*지시)"),
     ("prompt_leak", r"(도구|툴|tool)\s*(목록|리스트|list)[^\n]{0,15}(알려|보여|출력|공개|말해)"),
+    ("prompt_leak", r"(처음|맨\s*처음|최초|원래)[^\n]{0,6}(주어진|받은|설정된|입력된)[^\n]{0,6}(설정|지시|문장|규칙|프롬프트)"),
+    ("prompt_leak", r"\b(initial|original|hidden)\s+(configuration|instructions|prompt|rules)\b"),
+    ("prompt_leak", r"\b(list|print|show)\b[^\n]{0,20}\b(functions?|tools)\b[^\n]{0,15}\b(call|use|have)\b"),
+    ("prompt_leak", r"(연결된|쓸\s*수\s*있는|사용하는|호출\s*가능한)\s*(함수|도구|툴)\s*(이름|목록)"),
     ("fake_role_tag", r"\[\s*(system|admin|developer|root|시스템|관리자|개발자|운영자)[^\]]{0,20}\]"),
     ("fake_role_tag", r"<\s*/?\s*(system|admin|developer)\s*>"),
-    ("privilege_claim", r"(관리자|개발자|운영자|디버그|테스트|admin|developer|debug|god|dan)\s*(모드|mode)"),
+    # '관리자 모드 같은 건 필요 없고요' 처럼 부정하는 문맥은 제외 (T3S-013 오탐)
+    ("privilege_claim", r"(관리자|개발자|운영자|디버그|테스트|유지\s*보수|admin|developer|debug|maintenance|god|dan)\s*(모드|mode)(?![^\n]{0,10}(필요\s*없|아니|말고|안\s*해도|싫))"),
     ("privilege_claim", r"(권한\s*(검사|확인|체크|인증)[^\n]{0,8}(끝|완료|통과|생략|해제|필요\s*없))"),
-    ("privilege_claim", r"(저는|나는|난|제가|내가)\s*(본사\s*|A사\s*)?(관리자|직원|개발자|운영자|상담원|본사)\s*(이에요|예요|이야|야|입니다|인데|라서|이니까|이고)"),
+    ("privilege_claim", r"(저는|나는|난|제가|내가|저|나)\s*(본사\s*|A사\s*)?(관리자|직원|개발자|운영자|상담원|본사)\s*(이에요|예요|이야|야|입니다|인데|라서|이니까|이고)"),
     ("role_change", r"(지금부터|이제부터|이제)\s*(너는|넌|당신은)[^\n]{0,20}(모드|역할|아니야|아닙니다|관리자|개발자|제한\s*없)"),
     ("role_change", r"(jailbreak|탈옥|제한\s*(을\s*)?(풀|해제|없애))"),
+    ("role_change", r"(역할극|롤플레이|role\s*-?\s*play)[^\n]{0,40}(규칙|제한|보안|정책)[^\n]{0,6}(없|무시|해제)"),
+    ("role_change", r"(규칙|제한|보안\s*규칙)(이|은|도)?\s*(없는|안\s*지키는)\s*[^\n]{0,10}(봇|AI|모드|캐릭터|역할)"),
     ("data_dump", r"(고객|회원)\s*(목록|리스트|명단|db)"),
     ("data_dump", r"(내부|전체|모든)\s*(데이터|db|데이터베이스|고객\s*정보|고객\s*목록|메모)[^\n]{0,15}(출력|덤프|보여|알려|뽑아|전부)"),
 ]
 
 # 타인 정보 요청 (MAN-005 1항 '타인의 주문·개인정보 조회 시도')
 OTHER_PERSON_PATTERNS = [
-    ("other_customer", r"(다른|타)\s*(고객|회원|사람|사용자|분)[^\n]{0,10}(주문|정보|연락처|전화|주소|쿠폰|내역|적립금|등급)"),
+    # 대상과 정보 사이 간격을 4자 이내로 — '다른 분 선물용 주문인데'(본인 주문)는 제외 (T3S-015 오탐)
+    ("other_customer", r"(다른|타)\s*(고객|회원|사람|사용자|분)\s*(님)?\s*(의|이|가|께서)?(?![^\n]{0,6}(선물|대신|보낼|드릴))\s*[^\n]{0,4}(주문|정보|연락처|전화|주소|쿠폰|내역|적립금|등급)"),
+    ("other_customer", r"(아무|모든|전체)\s*(고객|회원|사람)[^\n]{0,6}(전화|연락처|주소|정보|번호)"),
 ]
 
-CUSTOMER_ID_RE = re.compile(r"\bC\d{4}\b", re.I)
-ORDER_ID_RE = re.compile(r"\bORD-\d{8}-\d{4}\b", re.I)
+# 한글 조사가 바로 붙어도 탐지 — 'C0017이에요' 는 한글도 \w 라서 \b 가 성립하지 않았음 (T3S-002)
+CUSTOMER_ID_RE = re.compile(r"(?<![A-Za-z0-9])C\d{4}(?!\d)", re.I)
+ORDER_ID_RE = re.compile(r"(?<![A-Za-z0-9])ORD-\d{8}-\d{4}(?!\d)", re.I)
+
+# 띄어쓰기·특수문자 우회 대비 — 공백·기호를 지운 문자열에서 핵심 키워드를 다시 찾는다 ("시 스 템 프 롬 프 트", "시.스.템")
+COMPACT_PATTERNS = [
+    ("prompt_leak", r"(시스템프롬프트|systemprompt|보안식별자|개발자메시지|숨겨진지시)"),
+    ("ignore_instructions", r"(이전|모든|기존)(지시|규칙|명령)(을|를|은|는)?(모두|전부|다)?(무시|따르지마)"),
+    ("privilege_claim", r"(관리자|개발자|admin|developer)(모드|mode)(?!(같은건|는)?(필요없|아니|말고))"),
+]
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"[\s\W_]+", "", text or "").lower()
 
 
 def detect_injection(text: str) -> list:
     """사용자 입력에서 인젝션·권한 사칭 패턴 라벨 목록을 돌려준다 (없으면 [])."""
     t = text or ""
     hits = [label for label, pat in INJECTION_PATTERNS if re.search(pat, t, re.I)]
+    c = _compact(t)
+    hits += [label for label, pat in COMPACT_PATTERNS if re.search(pat, c, re.I)]
     return sorted(set(hits))
+
+
+# 긴급 이관 (MAN-001 E01·E02·E08 — 주말·야간에도 당직 상담원 즉시 연결, MAN-005 4항)
+# 계정 도용 '신고'는 공격이 아니라 피해 신고이므로 타인 정보 요청 검사보다 먼저 본다.
+URGENT_PATTERNS = [
+    ("E08", r"(계정|아이디)\s*(도용|해킹|탈취)|해킹\s*당|도용\s*(된|당|같|의심)|"
+            r"(누가|모르는\s*사람|다른\s*사람|타인)[^\n]{0,15}(로그인|접속|결제|주문을?\s*(넣|했))|"
+            r"(제가|내가|저는|나는)\s*안\s*한\s*(주문|결제|로그인)|개인\s*정보\s*(가\s*)?(유출|털|새어)|"
+            r"비밀번호[^\n]{0,10}(바뀌|유출|털)"),
+    # '상처 난 사과', '상자가 터졌어요' 같은 상품 파손은 제외 — 사람이 다친 표현만
+    ("E02", r"화상|다쳤|다치|부상|불이\s*(붙|났|나서)|화재|폭발|배터리[^\n]{0,6}(터|불)|감전|응급실|"
+            r"병원에?\s*(갔|가야|실려)|피가\s*(나|났)|(손|발|몸|얼굴|눈|아이)[^\n]{0,6}(상처|데었|베였)"),
+    ("E01", r"소송|고소|소비자\s*(보호)?원|변호사|법적\s*(조치|대응|분쟁|절차)|언론\s*(에\s*)?제보|공정위|경찰에\s*신고"),
+]
+
+
+def detect_urgent(text: str):
+    """긴급 이관 사유 코드(E08 > E02 > E01 순으로 우선) 또는 None"""
+    for code, pat in URGENT_PATTERNS:
+        if re.search(pat, text or "", re.I):
+            return code
+    return None
 
 
 def detect_other_person(text: str, session_customer_id: str) -> list:

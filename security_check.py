@@ -15,11 +15,15 @@
 import argparse
 import datetime as dt
 import json
+import sys as _sys
+if hasattr(_sys.stdout, "reconfigure"):  # Windows 콘솔(cp949)에서 한글·특수문자 출력 크래시 방지
+    _sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import os
 import pathlib
 import types
 
 os.environ.setdefault("LLM_MODEL", "offline-check")  # llm_client 가 서버 없이도 import 되도록
+os.environ.setdefault("SECURE_TRACE", "0")  # 오프라인 점검은 trace 파일을 남기지 않음
 
 import baseline_agent as base  # noqa: E402
 import secure_agent as sec  # noqa: E402

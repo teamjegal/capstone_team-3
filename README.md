@@ -145,9 +145,40 @@ uv run python run_scenarios.py --agent improved S11 S12 S13 S16  # 공격 시나
 uv run python security_check.py                                 # LLM 서버 없이 Baseline vs Secure 공격 비교표
 uv run python -m unittest tests/test_security.py -v             # 보안 단위 테스트
 uv run python secure_agent.py --chat --customer C0001           # 보안 개선 에이전트 대화 모드
-uv run python run_eval.py --system secure                       # 같은 평가셋을 개선 에이전트로 (--agent secure 도 동일)
+uv run python run_eval.py --system secure                       # 같은 평가셋을 개선 에이전트로 (--agent secure 도 동일, 끝에 입력 가드 오탐 수 출력)
 uv run python run_scenarios.py --agent secure S11 S12 S13       # 보안 시나리오
+
+# 3조 자체 보안 평가셋 20건 — 누출 · 차단 · 오탐 · 긴급 이관을 자동 채점
+uv run python run_eval.py --system b --file tests/eval_security_team3.jsonl       # Baseline B
+uv run python run_eval.py --system secure --file tests/eval_security_team3.jsonl  # Secure
+uv run python run_eval.py --system secure --file tests/eval_security_team3.jsonl --repeat 3   # 3회 반복
+# 비공개 보안셋을 받으면 같은 방식으로: --file data/eval/eval_security.jsonl
 ```
+`--file` 로 넘긴 jsonl 은 `eval_public.jsonl` 과 같은 형식이고, `expected.security`(kind · forbidden · must_include_any)가 있으면 보안 채점이 추가됩니다.
+
+실제 LLM 3회 평균 (자세한 표는 [docs/security_design.md](docs/security_design.md) 5절):
+
+| 지표 | Baseline B | Secure |
+|---|---|---|
+| 자체 보안셋 통과 (20건) | 7.67 (7~8) | **19.0 (19~19)** |
+| 공격 12건 중 누출 | 6.33 (6~7) | **0** |
+| S11·S12·S13 누출 시나리오 수 (3개 중) | 3.0 | **0** |
+| 긴급 이관 E01·E02·E08 (3건) | 0 | **3.0** |
+| 공개셋 30건 입력 가드 오탐 | – | **0 (3회 모두)** |
+
+### 발표 데모
+```powershell
+uv run python demo_security.py              # 공격 4개 + 정상 1개를 Baseline / Secure 에 넣고 나란히 비교 (실제 LLM, 약 1분)
+uv run python demo_security.py --offline    # LLM 서버 없이 (발표장 네트워크 장애 대비, '완전히 속는 가짜 LLM')
+uv run python demo_security.py --full       # 답변 전문까지
+```
+각 줄에 `[누출]/[차단]` 과 막은 계층(① 입력 가드 · ② 도구 게이트웨이 · ③ 문서 신뢰 필터 · ④ 출력 가드)이 표시됩니다.
+
+### 실행 과정 trace
+Secure 는 요청 1건마다 `results/trace_<시각>_<pid>.jsonl` 에 한 줄을 남깁니다:
+`input_guard`(통과/차단/이관) → `llm_call`(턴·토큰·지연·요청 도구) → `tool`(게이트웨이 allow/block/error, 제거 필드) → `output_guard`(pass/mask/replace) → `final`.
+이름·연락처·이메일·상세주소와 API 키는 마스킹되어 저장됩니다. 끄려면 `$env:SECURE_TRACE="0"`.
+
 설계와 결과는 [docs/security_design.md](docs/security_design.md) 에 정리했습니다. 보안 이벤트는 `results/security_log.jsonl` 에 남습니다.
 
 `--customer` 는 로그인한 고객 ID(세션)입니다 (C0001 ~ C0050).
@@ -169,7 +200,7 @@ uv run python run_scenarios.py --agent secure S11 S12 S13       # 보안 시나�
 | `baseline_rag.py` | Baseline A — Naive RAG (multilingual-e5 임베딩 + Chroma, **허점 8개를 일부러 남김**) |
 | `baseline_agent.py` | Baseline B — Naive Agent (도구 13개, **허점 15개를 일부러 남김**) |
 | `compare_chat.py` | A · B 비교 대화 모드 — 같은 질문에 두 베이스라인 답을 나란히 출력 |
-| `run_eval.py` | 평가셋 실행 · 결과 저장 · 간단 채점 (`--system a` / `b`) |
+| `run_eval.py` | 평가셋 실행 · 결과 저장 · 간단 채점 (`--system a` / `b` / `secure`, `--file` 보안셋 자동 채점) |
 | `run_scenarios.py` | 멀티턴 대화 시나리오 실행 — 대화 중 문제 재현 |
 | `scenarios/chat_scenarios.json` | 운영 문제 유형별 대화 시나리오 16개 |
 | `docs/baseline_flaws.md` | 허점 지도 — 문제 영역별 코드 위치와 재현 결과 |
@@ -178,7 +209,9 @@ uv run python run_scenarios.py --agent secure S11 S12 S13       # 보안 시나�
 | `security_guard.py` | 보안 계층 — 입력 가드 · 문서 신뢰 필터/정화 · 출력 가드 · 보안 로그 (LLM 없이 동작) |
 | `secure_agent.py` | 보안 개선 에이전트 — 세션 바인딩 도구 게이트웨이 + 다층 방어 (허점-10 · 11 개선) |
 | `security_check.py` | 오프라인 보안 점검 — '속은 LLM' 가정으로 Baseline vs Secure 누출 비교 |
-| `tests/test_security.py` | 보안 단위 테스트 |
+| `tests/test_security.py` | 보안 단위 테스트 (실제 LLM 측정에서 찾은 실패의 회귀 테스트 포함) |
+| `demo_security.py` | 발표용 데모 — 공격 4 + 정상 1 을 Baseline / Secure 나란히 비교 (`--offline` 지원) |
+| `tests/eval_security_team3.jsonl` | 3조 자체 보안 평가셋 20건 (공격 12 · 의심 단어 정상 4 · 긴급 이관 3 · 도구 장애 1) |
 | `docs/security_design.md` | 보안 개선 설계 — 원인 · 문제 · 해결 · 효과 · 트레이드오프 |
 
 ## 알려진 문제 (개선 대상)
